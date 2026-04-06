@@ -3,8 +3,8 @@ import pandas as pd
 # =============================
 # 1) CARGA DE ARCHIVOS
 # =============================
-bd = pd.read_excel("BD_.xlsx")
-est = pd.read_excel("estados.xlsx")   # cambia el nombre si tu archivo se llama distinto
+bd = pd.read_excel("BD_.xlsx") #Base de datos matriculados por periodo
+est = pd.read_excel("estados.xlsx")   # Base de datos admitidos
 
 # =============================
 # 2) LIMPIEZA DE COLUMNAS
@@ -169,4 +169,4 @@ base = base.sort_values(["CODIGO", "PERIODO_ACADEMICO"]).reset_index(drop=True)
 
 base.to_excel("BASE_COMPLETA.xlsx", index=False)
 
-print("✅ Archivo generado: BASE_COMPLETA.xlsx")
+print("Archivo generado: BASE_COMPLETA.xlsx")
