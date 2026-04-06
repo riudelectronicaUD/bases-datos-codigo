@@ -1,4 +1,4 @@
-# 📊 Análisis de Deserción Estudiantil
+# Análisis de Deserción Estudiantil
 
 Este proyecto presenta un análisis de la deserción estudiantil a partir de la integración y procesamiento de bases de datos institucionales. El objetivo es identificar el comportamiento de las cohortes de estudiantes desde su ingreso hasta su estado actual, permitiendo evaluar la permanencia y deserción a lo largo del tiempo.
 
