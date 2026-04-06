@@ -1,0 +1,172 @@
+import pandas as pd
+
+# =============================
+# 1) CARGA DE ARCHIVOS
+# =============================
+bd = pd.read_excel("BD_.xlsx")
+est = pd.read_excel("estados.xlsx")   # cambia el nombre si tu archivo se llama distinto
+
+# =============================
+# 2) LIMPIEZA DE COLUMNAS
+# =============================
+bd.columns = bd.columns.str.strip().str.upper()
+est.columns = est.columns.str.strip().str.upper()
+
+# =============================
+# 3) FUNCIONES AUXILIARES
+# =============================
+def clean_code(series):
+    return (
+        series.astype(str)
+        .str.strip()
+        .str.replace(r"\.0$", "", regex=True)
+        .replace({"nan": pd.NA, "None": pd.NA, "": pd.NA})
+    )
+
+def clean_period(series):
+    s = series.astype(str).str.strip()
+    s = s.str.replace(r"\.0$", "", regex=True)
+    s = s.str.replace(r"[^0-9]", "", regex=True)  # sirve si viene 2017-1 o 20171.0
+    s = s.replace({"nan": pd.NA, "None": pd.NA, "": pd.NA})
+    return pd.to_numeric(s, errors="coerce").astype("Int64")
+
+# =============================
+# 4) RENOMBRAR COLUMNAS CLAVE
+# =============================
+bd = bd.rename(columns={
+    "PERIODO ACADEMICO": "PERIODO_ACADEMICO",
+    "PERIODO MATRICULA": "PERIODO_MATRICULA",
+    "ESTADO": "ESTADO_BD"
+})
+
+est = est.rename(columns={
+    "PERIODO": "PERIODO_INGRESO",
+    "ESTADO": "ESTADO_ADMISION"
+})
+
+# =============================
+# 5) LIMPIAR CÓDIGOS Y PERIODOS
+# =============================
+bd["CODIGO"] = clean_code(bd["CODIGO"])
+est["CODIGO"] = clean_code(est["CODIGO"])
+
+bd["PERIODO_ACADEMICO"] = clean_period(bd["PERIODO_ACADEMICO"])
+bd["PERIODO_MATRICULA"] = clean_period(bd["PERIODO_MATRICULA"])
+est["PERIODO_INGRESO"] = clean_period(est["PERIODO_INGRESO"])
+
+# quitar filas sin código o sin periodo válido
+bd = bd.dropna(subset=["CODIGO", "PERIODO_ACADEMICO"]).copy()
+est = est.dropna(subset=["CODIGO", "PERIODO_INGRESO"]).copy()
+
+# =============================
+# 6) DEDUPLICAR SI HAY REPETIDOS
+# =============================
+bd = bd.drop_duplicates(subset=["CODIGO", "PERIODO_ACADEMICO"], keep="first")
+
+# En estados, dejamos un registro por estudiante:
+est = est.groupby("CODIGO", as_index=False).agg({
+    "PERIODO_INGRESO": "min",
+    "ESTADO_ADMISION": "last"
+})
+
+# =============================
+# 7) OBTENER EL PERIODO DE INGRESO POR ESTUDIANTE
+#    (primero de estados; si no existe, lo toma de BD_)
+# =============================
+bd_ingreso = bd.groupby("CODIGO", as_index=False)["PERIODO_ACADEMICO"].min()
+bd_ingreso = bd_ingreso.rename(columns={"PERIODO_ACADEMICO": "PERIODO_INGRESO_BD"})
+
+entry = est.merge(bd_ingreso, on="CODIGO", how="outer")
+entry["PERIODO_INGRESO"] = entry["PERIODO_INGRESO"].combine_first(entry["PERIODO_INGRESO_BD"])
+entry = entry[["CODIGO", "PERIODO_INGRESO", "ESTADO_ADMISION"]].copy()
+
+# =============================
+# 8) LISTA DE TODOS LOS PERIODOS ACADÉMICOS
+# =============================
+periodos_bd = set(bd["PERIODO_ACADEMICO"].dropna().astype(int).tolist())
+periodos_est = set(entry["PERIODO_INGRESO"].dropna().astype(int).tolist())
+periodos_todos = sorted(periodos_bd.union(periodos_est))
+
+periodos_df = pd.DataFrame({"PERIODO_ACADEMICO": periodos_todos})
+
+# =============================
+# 9) CREAR LA BASE COMPLETA:
+#    estudiante x periodos desde su ingreso hasta el último periodo
+# =============================
+panel = entry[["CODIGO", "PERIODO_INGRESO"]].dropna().copy()
+panel["key"] = 1
+periodos_df["key"] = 1
+
+base = panel.merge(periodos_df, on="key", how="left").drop(columns="key")
+base = base[base["PERIODO_ACADEMICO"] >= base["PERIODO_INGRESO"]].copy()
+
+# =============================
+# 10) CRUCE CON BD_ (matrículas reales)
+# =============================
+base = base.merge(
+    bd,
+    on=["CODIGO", "PERIODO_ACADEMICO"],
+    how="left"
+)
+
+# Indicador de si ese periodo sí tuvo matrícula real en BD_
+# (se calcula ANTES de rellenar datos)
+base["MATRICULADO"] = base["NOMBRE"].notna()
+
+# =============================
+# 11) CRUCE CON ESTADOS (estado de admisión / estado final)
+# =============================
+base = base.merge(
+    entry[["CODIGO", "ESTADO_ADMISION"]],
+    on="CODIGO",
+    how="left"
+)
+
+# =============================
+# 12) RELLENAR INFORMACIÓN DEL ESTUDIANTE A LO LARGO DE TODOS LOS PERIODOS
+# =============================
+columnas_a_rellenar = [
+    "PERIODO_MATRICULA",
+    "NOMBRE",
+    "IDENTIFICACION",
+    "PENSUM",
+    "ACUERDO",
+    "TIPO ESTUDIANTE",
+    "COD.",
+    "ESTADO DEL PERIODO",
+    "COD.2",
+    "ESTADO_BD",
+    "ULTIMA MATRICULA"
+]
+
+columnas_a_rellenar = [c for c in columnas_a_rellenar if c in base.columns]
+
+base[columnas_a_rellenar] = (
+    base.sort_values(["CODIGO", "PERIODO_ACADEMICO"])
+        .groupby("CODIGO")[columnas_a_rellenar]
+        .transform(lambda x: x.ffill().bfill())
+)
+
+# =============================
+# 13) COMPLETAR PERIODO MATRICULA
+# =============================
+if "PERIODO_MATRICULA" in base.columns:
+    base["PERIODO_MATRICULA"] = base["PERIODO_MATRICULA"].fillna(base["PERIODO_INGRESO"])
+
+# =============================
+# 14) ESTADO FINAL
+# =============================
+# Si hay dato real en BD_, úsalo; si no, usa el estado de admitidos
+if "ESTADO_BD" in base.columns:
+    base["ESTADO_FINAL"] = base["ESTADO_BD"].combine_first(base["ESTADO_ADMISION"])
+else:
+    base["ESTADO_FINAL"] = base["ESTADO_ADMISION"]
+
+# =============================
+# 15) ORDENAR Y GUARDAR
+# =============================
+base = base.sort_values(["CODIGO", "PERIODO_ACADEMICO"]).reset_index(drop=True)
+
+base.to_excel("BASE_COMPLETA.xlsx", index=False)
+
+print("✅ Archivo generado: BASE_COMPLETA.xlsx")
